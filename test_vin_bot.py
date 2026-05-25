@@ -1051,6 +1051,67 @@ POSITION_KEYWORDS = {
     "правый":   "Пр.",  "правая":   "Пр.",  "прав":     "Пр.",
 }
 
+# ── Сторона детали по cat-у (для пар «перед/зад») ───────────────────
+#  Используется как фильтр cats_list, когда пользователь явно указал
+#  «передний» / «задний». Cat-ы вне этого словаря — не позиционные.
+CAT_SIDE: dict[str, str] = {
+    "281":  "front", "282":  "rear",   # колодки
+    "82":   "front", "84":   "rear",   # тормозные диски
+    "1041": "front", "1042": "rear",   # амортизаторы
+    "188":  "front", "189":  "rear",   # пружины
+    "273":  "front", "274":  "rear",   # рычаги подвески
+}
+
+SIDE_WORDS_FRONT: set[str] = {
+    "передний", "передняя", "передние", "переднее",
+    "переднего", "переднюю", "передним", "передними",
+    "передних", "передней", "перед", "спереди", "front",
+}
+SIDE_WORDS_REAR: set[str] = {
+    "задний", "задняя", "задние", "заднее",
+    "заднего", "заднюю", "задним", "задними",
+    "задних", "задней", "зад", "сзади", "rear",
+}
+SIDE_LABEL_RU: dict[str, str] = {"front": "Передний", "rear": "Задний"}
+
+
+def detect_side(text_lower: str) -> tuple[str | None, bool]:
+    """Извлекает явно указанную сторону из запроса пользователя.
+
+    Возвращает (side, explicit_side):
+      side          ∈ {'front', 'rear', None}
+      explicit_side  — True если пользователь явно назвал сторону.
+    Если в запросе одновременно «передний» и «задний» — считаем
+    позицию неуточнённой (explicit_side=False, side=None), чтобы не
+    отсекать обе категории.
+    """
+    cleaned = text_lower.replace(",", " ").replace(".", " ").replace("/", " ")
+    tokens = set(cleaned.split())
+    has_front = bool(tokens & SIDE_WORDS_FRONT)
+    has_rear  = bool(tokens & SIDE_WORDS_REAR)
+    if has_front and not has_rear:
+        return "front", True
+    if has_rear and not has_front:
+        return "rear", True
+    return None, False
+
+
+def filter_cats_by_side(cats_list, side):
+    """Оставляет только cat-ы, соответствующие запрошенной стороне.
+
+    Cat-ы, которых нет в CAT_SIDE (т.е. сам по себе не позиционные —
+    например, рулевая тяга, ШРУС, опора КПП), остаются без изменений.
+    Если side=None — список возвращается как есть.
+    """
+    if side is None:
+        return cats_list
+    out = []
+    for cat_id, cat_label in cats_list:
+        cat_side = CAT_SIDE.get(cat_id)
+        if cat_side is None or cat_side == side:
+            out.append((cat_id, cat_label))
+    return out
+
 # ══════════════════════════════════════════════════════════════════
 #  ASYNC API
 # ══════════════════════════════════════════════════════════════════
@@ -1422,9 +1483,22 @@ def format_car_info(vin_info: dict) -> str:
     return f"{car}\n<i>{det}</i>" if det else car
 
 def find_part(text: str):
+    """Возвращает (cats_list, part_name, position_hint, side, explicit_side) или None.
+
+    side / explicit_side:
+      Если пользователь явно указал «передний» или «задний» — cats_list
+      урезается до соответствующей стороны (см. CAT_SIDE), а в cmd_vin
+      это используется для запрета type-fallback по противоположной
+      стороне (см. сценарий API empty).
+    """
+    text_lower = text.lower()
+    # Сторону определяем из исходного запроса один раз —
+    # она важна одинаково для обеих веток (resolver и legacy).
+    side, explicit_side = detect_side(text_lower)
+
     # Новый CSV-резолвер
     resolved = resolver.resolve(text)
-    
+
     if resolved["matched"]:
         logger.info(
             f"PartsResolver: '{text}' → {resolved['part_name']} "
@@ -1433,21 +1507,34 @@ def find_part(text: str):
         # Собираем position_hint из модификаторов
         mods = resolved["modifiers"]
         position_hint = " ".join(mods.get("position", []) + mods.get("side", []))
-        
+
+        # Резолвер тоже может знать сторону — учитываем её,
+        # если в самом тексте сторона не была однозначной.
+        if not explicit_side:
+            mod_tokens = set()
+            for v in mods.get("position", []) + mods.get("side", []):
+                mod_tokens.update(v.lower().split())
+            if mod_tokens & SIDE_WORDS_FRONT and not (mod_tokens & SIDE_WORDS_REAR):
+                side, explicit_side = "front", True
+            elif mod_tokens & SIDE_WORDS_REAR and not (mod_tokens & SIDE_WORDS_FRONT):
+                side, explicit_side = "rear", True
+
         # Ищем cats_list через старый PARTS_MAP по part_name
         part_name_lower = resolved["part_name"].lower()
         for keyword in sorted(PARTS_MAP.keys(), key=len, reverse=True):
             if keyword in part_name_lower:
                 cats_list, part_name, _group = PARTS_MAP[keyword]
-                return cats_list, part_name, position_hint
-        
+                cats_list = filter_cats_by_side(cats_list, side)
+                if not cats_list:
+                    return None
+                return cats_list, part_name, position_hint, side, explicit_side
+
         # Если в PARTS_MAP не нашли — возвращаем None пока
         logger.info(f"PartsResolver нашёл '{resolved['part_name']}' но в PARTS_MAP нет cat")
         return None
 
     # Фоллбэк на старую логику
     logger.info(f"PartsResolver не нашёл '{text}', fallback на PARTS_MAP")
-    text_lower = text.lower()
     position_parts = []
     for kw, label in POSITION_KEYWORDS.items():
         if kw in text_lower.split() and label not in position_parts:
@@ -1456,7 +1543,10 @@ def find_part(text: str):
     for keyword in sorted(PARTS_MAP.keys(), key=len, reverse=True):
         if keyword in text_lower:
             cats_list, part_name, _group = PARTS_MAP[keyword]
-            return cats_list, part_name, position_hint
+            cats_list = filter_cats_by_side(cats_list, side)
+            if not cats_list:
+                return None
+            return cats_list, part_name, position_hint, side, explicit_side
     return None
 
 def dedupe_name(s: str) -> str:
@@ -1504,7 +1594,19 @@ async def cmd_vin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    cats_list, part_name, position = found
+    cats_list, part_name, position, side, explicit_side = found
+
+    # Если пользователь указал сторону, но после фильтрации не осталось
+    # ни одной категории — честный отказ, без подбора по противоположной.
+    if not cats_list:
+        side_ru = SIDE_LABEL_RU.get(side or "", "указанной стороне")
+        await update.message.reply_text(
+            f"❌ <b>{part_name}</b> — нет категорий для запрошенной стороны "
+            f"({side_ru}). Подбор отключён, чтобы не подменить деталь "
+            f"противоположной стороной.",
+            parse_mode="HTML",
+        )
+        return
 
     async with aiohttp.ClientSession() as session:
         # Шаг 1: VINdecode
@@ -1671,6 +1773,24 @@ async def cmd_vin(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 hint = NO_FALLBACK_HINTS.get(cat_id, "")
                 await update.message.reply_text(
                     f"❌ <b>{group_name}</b> не найден в базе.\n\n{hint}",
+                    parse_mode="HTML",
+                )
+                continue
+
+                #    Если сторона указана явно, а API ничего не вернул —
+                #    честный отказ. Типовые OEM из OEM_FALLBACK_ARTICLES
+                #    не привязаны к стороне и могут подменить деталь
+                #    противоположной стороной, что недопустимо.
+            if explicit_side:
+                side_ru = SIDE_LABEL_RU.get(side or "", "указанной стороне")
+                await update.message.reply_text(
+                    f"❌ <b>{group_name}</b> — не удалось подтвердить артикул "
+                    f"для запрошенной стороны ({side_ru}).\n"
+                    f"<i>API не вернул данные по этому VIN/cat. Типовой "
+                    f"OEM-резерв отключён, чтобы не подменить деталь "
+                    f"противоположной стороной.</i>\n"
+                    f"💡 Попробуй уточнить запрос или проверить в каталоге: "
+                    f"<code>/debug parts {vin} {cat_id}</code>",
                     parse_mode="HTML",
                 )
                 continue
