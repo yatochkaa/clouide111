@@ -96,6 +96,61 @@ OEM_SUPPLIER_BRANDS = {
 }
 
 # ══════════════════════════════════════════════════════════════════
+#  АЛЬТЕРНАТИВНЫЕ CAT-ы
+# ══════════════════════════════════════════════════════════════════
+#  Если основной cat вернул [] / timeout — пробуем альтернативы.
+#  Пример: масляный фильтр на partsapi может лежать под cat=7, 10 или 774
+#  в зависимости от модели.
+
+ALTERNATIVE_CATS: dict[str, list[str]] = {
+    "7": ["10", "774"],
+}
+
+# ══════════════════════════════════════════════════════════════════
+#  КАТЕГОРИИ БЕЗ FALLBACK
+# ══════════════════════════════════════════════════════════════════
+#  Для этих cat НЕ используем OEM_FALLBACK_ARTICLES при пустом API:
+#  ремень/комплект ГРМ — на цепных двигателях физически отсутствует,
+#  типовой артикул вводит пользователя в заблуждение.
+
+NO_FALLBACK_CATS = {"306", "307"}
+
+# Сообщения-подсказки для NO_FALLBACK_CATS
+NO_FALLBACK_HINTS: dict[str, str] = {
+    "306": (
+        "💡 Возможно на данном авто <b>цепной привод ГРМ</b> — "
+        "ремень не предусмотрен.\nПопробуй запросить <b>цепь ГРМ</b> "
+        "или проверь в каталоге: <code>/debug parts VIN 306</code>"
+    ),
+    "307": (
+        "💡 Возможно на данном авто <b>цепной привод ГРМ</b> — "
+        "комплект ремня не предусмотрен.\nПопробуй запросить "
+        "<b>цепь ГРМ</b> или <code>/debug parts VIN 307</code>"
+    ),
+}
+
+# ══════════════════════════════════════════════════════════════════
+#  ПРИОРИТЕТ ИЗВЕСТНЫХ AFTERMARKET-БРЕНДОВ
+# ══════════════════════════════════════════════════════════════════
+#  Используется при сортировке аналогов: эти бренды показываем
+#  первыми (топ-10). Порядок имеет значение — раньше = выше приоритет.
+
+TOP_AFTERMARKET_BRANDS = [
+    "BOSCH", "MANN-FILTER", "MANN", "MAHLE", "KNECHT",
+    "NGK", "DENSO", "BERU", "CHAMPION",
+    "GATES", "CONTITECH", "DAYCO",
+    "SACHS", "BILSTEIN", "KAYABA", "KYB", "MONROE", "BOGE",
+    "FEBI BILSTEIN", "FEBI", "SWAG", "MEYLE", "LEMFOERDER", "LEMFORDER",
+    "VALEO", "HELLA", "MAGNETI MARELLI",
+    "BREMBO", "ATE", "TRW", "FERODO", "TEXTAR", "PAGID", "JURID",
+    "LUCAS", "DELPHI", "VEMO", "VAICO",
+    "LUK", "EXEDY", "AISIN",
+    "SKF", "FAG", "INA", "NSK", "KOYO", "NTN",
+    "FILTRON", "HENGST", "PURFLUX", "UFI", "WIX",
+    "ELRING", "VICTOR REINZ", "CORTECO",
+]
+
+# ══════════════════════════════════════════════════════════════════
 #  OEM ПРЕФИКСЫ ПО МАРКЕ + КАТЕГОРИИ
 # ══════════════════════════════════════════════════════════════════
 
@@ -714,7 +769,11 @@ PARTS_MAP: dict[str, tuple[list[tuple[str, str]], str, int]] = {
     "воздушный фильтр":      ([("8", "")],   "Воздушный фильтр", 1),
     "фильтр воздуха":        ([("8", "")],   "Воздушный фильтр", 1),
     "ремень грм":            ([("306", "")], "Ремень ГРМ", 1),
-    "цепь грм":              ([("213", "")], "Цепь ГРМ", 1),
+    "цепь грм":              ([("90", "")],  "Цепь ГРМ", 1),
+    "натяжитель цепи":       ([("91", "")],  "Натяжитель цепи ГРМ", 1),
+    "успокоитель цепи":      ([("92", "")],  "Успокоитель цепи ГРМ", 1),
+    "звёздочка грм":         ([("93", "")],  "Звёздочка ГРМ", 1),
+    "звездочка грм":         ([("93", "")],  "Звёздочка ГРМ", 1),
     "комплект грм":          ([("307", "")], "Комплект ГРМ", 1),
     "грм комплект":          ([("307", "")], "Комплект ГРМ", 1),
     "натяжной ролик":        ([("308", "")], "Натяжной ролик", 1),
@@ -725,6 +784,13 @@ PARTS_MAP: dict[str, tuple[list[tuple[str, str]], str, int]] = {
     "прокладка головки":     ([("162", "")], "Прокладка ГБЦ", 1),
     "маслосъемные колпачки": ([("212", "")], "Маслосъёмные колпачки", 1),
     "маслосъёмные колпачки": ([("212", "")], "Маслосъёмные колпачки", 1),
+    "маховик":               ([("258", "")], "Маховик", 1),
+    "подушка двигателя":     ([("247", "")], "Опора двигателя", 1),
+    "опора двигателя":       ([("247", "")], "Опора двигателя", 1),
+    "подушка кпп":           ([("248", "")], "Опора КПП", 1),
+    "опора кпп":             ([("248", "")], "Опора КПП", 1),
+    "подушка коробки":       ([("248", "")], "Опора КПП", 1),
+    "подрамник":             ([("275", "")], "Подрамник", 1),
 
     # ───── 2. Система охлаждения ─────
     "помпа":                 ([("1046", "")], "Водяной насос", 2),
@@ -734,7 +800,9 @@ PARTS_MAP: dict[str, tuple[list[tuple[str, str]], str, int]] = {
     "радиатор":              ([("470", "")],  "Радиатор охлаждения", 2),
     "патрубок охлаждения":   ([("476", "")],  "Патрубок охлаждения", 2),
     "патрубки охлаждения":   ([("476", "")],  "Патрубок охлаждения", 2),
-    "расширительный бачок":  ([("1048", "")], "Расширительный бачок", 2),
+    "расширительный бачок":  ([("472", "")],  "Расширительный бачок", 2),
+    "бачок расширительный":  ([("472", "")],  "Расширительный бачок", 2),
+    "крышка радиатора":      ([("471", "")],  "Крышка радиатора", 2),
     "вентилятор охлаждения": ([("822", "")],  "Вентилятор охлаждения", 2),
 
     # ───── 3. Топливная система ─────
@@ -746,13 +814,17 @@ PARTS_MAP: dict[str, tuple[list[tuple[str, str]], str, int]] = {
     "регулятор давления топлива": ([("749", "")], "Регулятор давления топлива", 3),
 
     # ───── 4. Впуск и выпуск ─────
-    "дроссельная заслонка":  ([("715", "")], "Дроссельная заслонка", 4),
+    "дроссельная заслонка":  ([("151", "")], "Дроссельная заслонка", 4),
+    "дроссель":              ([("151", "")], "Дроссельная заслонка", 4),
     "катализатор":           ([("429", "")], "Катализатор", 4),
     "сажевый фильтр":        ([("428", "")], "Сажевый фильтр", 4),
     "глушитель":             ([("26", "")],  "Глушитель", 4),
+    "передняя труба":        ([("26", "")],  "Передняя труба (глушитель)", 4),
+    "средняя труба":         ([("27", "")],  "Средняя труба", 4),
+    "задняя банка":          ([("28", "")],  "Задняя банка глушителя", 4),
     "резонатор":             ([("775", "")], "Резонатор", 4),
-    "гофра выхлопа":         ([("765", "")], "Гофра выхлопа", 4),
-    "гофра":                 ([("765", "")], "Гофра выхлопа", 4),
+    "гофра выхлопа":         ([("403", "")], "Гофра выхлопа", 4),
+    "гофра":                 ([("403", "")], "Гофра выхлопа", 4),
     "турбина":               ([("708", "")], "Турбина", 4),
     "турбокомпрессор":       ([("708", "")], "Турбина", 4),
 
@@ -813,9 +885,12 @@ PARTS_MAP: dict[str, tuple[list[tuple[str, str]], str, int]] = {
     # ───── 7. Рулевое управление ─────
     "рулевая рейка":         ([("286", "")], "Рулевая рейка", 7),
     "рулевая тяга":          ([("284", "")], "Рулевая тяга", 7),
+    "тяга рулевая":          ([("284", "")], "Рулевая тяга", 7),
     "наконечник рулевой тяги": ([("51", "")], "Наконечник рул. тяги", 7),
+    "рулевой наконечник":    ([("51", "")],  "Наконечник рул. тяги", 7),
     "наконечник":            ([("51", "")],  "Наконечник рул. тяги", 7),
     "насос гур":             ([("288", "")], "Насос ГУР", 7),
+    "пыльник рулевой рейки": ([("288", "")], "Пыльник рулевой рейки", 7),
 
     # ───── 8. Трансмиссия и сцепление ─────
     "шрус наружний":         ([("5", "Наружний")],     "ШРУС наружный", 8),
@@ -827,12 +902,13 @@ PARTS_MAP: dict[str, tuple[list[tuple[str, str]], str, int]] = {
     "граната":               ([("5", "")],             "ШРУС", 8),
     "приводной вал":         ([("13", "")],            "Приводной вал", 8),
     "полуось":               ([("13", "")],            "Приводной вал", 8),
-    "пыльник шруса":         ([("380", "")],           "Пыльник ШРУСа", 8),
+    "пыльник шруса":         ([("6", "")],             "Пыльник ШРУСа", 8),
     "комплект сцепления":    ([("479", "")],           "Комплект сцепления", 8),
     "сцепление":             ([("479", "")],           "Комплект сцепления", 8),
     "диск сцепления":        ([("262", "")],           "Диск сцепления", 8),
     "корзина сцепления":     ([("480", "")],           "Корзина сцепления", 8),
     "выжимной подшипник":    ([("48", "")],            "Выжимной подшипник", 8),
+    "подшипник выжимной":    ([("48", "")],            "Выжимной подшипник", 8),
     "выжимной":              ([("48", "")],            "Выжимной подшипник", 8),
 
     # ───── 9. Электрика и зажигание ─────
@@ -873,9 +949,11 @@ PARTS_MAP: dict[str, tuple[list[tuple[str, str]], str, int]] = {
     # ───── 13. Датчики ─────
     "датчик abs":            ([("624", "")], "Датчик ABS", 13),
     "датчик абс":            ([("624", "")], "Датчик ABS", 13),
-    "лямбда-зонд":           ([("619", "")], "Лямбда-зонд", 13),
-    "лямбда зонд":           ([("619", "")], "Лямбда-зонд", 13),
-    "лямбда":                ([("619", "")], "Лямбда-зонд", 13),
+    "лямбда-зонд":           ([("115", "")], "Лямбда-зонд", 13),
+    "лямбда зонд":           ([("115", "")], "Лямбда-зонд", 13),
+    "лямбда":                ([("115", "")], "Лямбда-зонд", 13),
+    "кислородный датчик":    ([("115", "")], "Лямбда-зонд", 13),
+    "датчик кислорода":      ([("115", "")], "Лямбда-зонд", 13),
     "датчик коленвала":      ([("605", "")], "Датчик коленвала", 13),
     "датчик положения коленвала": ([("605", "")], "Датчик коленвала", 13),
     "датчик температуры":    ([("607", "")], "Датчик температуры", 13),
@@ -955,6 +1033,25 @@ async def api_get_parts_by_vin(session, vin: str, cat: str) -> list:
         return []
     return data if isinstance(data, list) else [data]
 
+async def fetch_parts_with_cat_fallback(
+    session: aiohttp.ClientSession,
+    vin: str,
+    cat: str,
+) -> tuple[str, list]:
+    """
+    Запрашивает getPartsbyVIN по основному cat. Если ответ пустой/таймаут —
+    пробует альтернативные cat-ы из ALTERNATIVE_CATS (например 7 → 10, 774
+    для масляного фильтра).
+    Возвращает (фактический cat, результаты). Если ничего не нашли —
+    возвращает исходный cat и [].
+    """
+    cats_to_try = [cat] + ALTERNATIVE_CATS.get(cat, [])
+    for try_cat in cats_to_try:
+        results = await api_get_parts_by_vin(session, vin, try_cat)
+        if results and any(r.get("parts") for r in results):
+            return try_cat, results
+    return cat, []
+
 async def api_get_crosses(session, number: str) -> list:
     data = await async_get(session, {
         "method": "getCrosses",
@@ -1010,15 +1107,27 @@ def _article_sort_key(
     prefixes: list[str],
     popularity: dict[str, int],
 ) -> tuple:
+    """
+    Ключ сортировки кандидатов. Меньше = лучше.
+      1. Своя марка вперёд.
+      2. Длиннее совпавший OEM-префикс.
+      3. БОЛЬШИЙ числовой суффикс приоритетнее (более новая замена
+         артикула: 16400-36240 < 16400-36250).
+      4. Цифровой суффикс предпочтительнее буквенного.
+      5. Популярность (по всем брендам в ответе).
+      6. Длина → стабильность.
+    """
     norm = normalize_article(article)
     suffix = _suffix_after_dash(article)
     is_own_brand = brand.upper() != manu_upper
     prefix_len = _prefix_match_len(article, prefixes)
     pop = popularity.get(norm, 1)
     suffix_has_letter = not suffix.isdigit() and any(c.isalpha() for c in suffix)
+    suffix_num = int(suffix) if suffix.isdigit() else -1
     return (
         is_own_brand,
         -prefix_len,
+        -suffix_num,
         suffix_has_letter,
         -pop,
         len(norm),
@@ -1134,6 +1243,30 @@ def filter_crosses(
         seen_roots.add(root)
         result.append((brand, art))
     return result
+
+def _brand_priority(brand: str) -> int:
+    """Меньше = лучше. Известные aftermarket-бренды получают индекс из
+    TOP_AFTERMARKET_BRANDS; неизвестные — большое число (показываются позже)."""
+    b = brand.upper().strip()
+    for i, known in enumerate(TOP_AFTERMARKET_BRANDS):
+        if b == known or b.startswith(known + " ") or b == known.replace(" ", ""):
+            return i
+    # Частичное совпадение (FEBI*, MANN*) — даём средний приоритет
+    for i, known in enumerate(TOP_AFTERMARKET_BRANDS):
+        root = known.split()[0]
+        if root and (b.startswith(root) or root in b):
+            return 500 + i
+    return 9999
+
+def sort_crosses_by_priority(
+    crosses: list[tuple[str, str]],
+) -> list[tuple[str, str]]:
+    """Сортирует кроссы: известные aftermarket-бренды (BOSCH/MANN/MAHLE/NGK...)
+    вперёд, остальные — по алфавиту."""
+    return sorted(crosses, key=lambda x: (_brand_priority(x[0]), x[0].upper()))
+
+def _is_supplier_brand(brand: str) -> bool:
+    return brand.upper().strip() in OEM_SUPPLIER_BRANDS
 
 # ══════════════════════════════════════════════════════════════════
 #  FALLBACK: getCrosses через OEM_FALLBACK_ARTICLES
@@ -1266,8 +1399,10 @@ async def cmd_vin(update: Update, context: ContextTypes.DEFAULT_TYPE):
             header.append(f"VIN: <code>{vin}</code> | cat: <code>{cat_id}</code>")
             await update.message.reply_text("\n".join(header), parse_mode="HTML")
 
-            # Шаг 2: getPartsbyVIN
-            api_results = await api_get_parts_by_vin(session, vin, cat_id)
+            # Шаг 2: getPartsbyVIN с авто-fallback по cat (например 7→10→774)
+            actual_cat, api_results = await fetch_parts_with_cat_fallback(
+                session, vin, cat_id
+            )
             api_empty = (
                 not api_results
                 or not any(r.get("parts") for r in api_results)
@@ -1289,86 +1424,153 @@ async def cmd_vin(update: Update, context: ContextTypes.DEFAULT_TYPE):
             primary, other_oem = (None, [])
             if all_parts:
                 primary, other_oem = pick_primary_oem(
-                    all_parts, cat_id, manu_name, shrus_filter
+                    all_parts, actual_cat, manu_name, shrus_filter
                 )
 
-            # ── FALLBACK: API пустой ИЛИ pick_primary_oem ничего не дал ──
-            if not primary:
-                if api_empty:
-                    reason = "API не отдаёт данные для этого VIN/cat"
-                elif not all_parts:
-                    reason = "найденные артикулы отфильтрованы как грузовые"
+            # ── СЦЕНАРИЙ A: основной OEM найден через API ──
+            if primary:
+                p_brand, p_art = primary
+                is_supplier = _is_supplier_brand(p_brand)
+
+                # Метка источника
+                if is_supplier:
+                    src_label = "OEM поставщика (надёжный)"
+                    oem_emoji = "✅"
+                elif manu_name and p_brand.upper().strip() == manu_name.upper().strip():
+                    src_label = "OEM марки авто"
+                    oem_emoji = "✅"
                 else:
-                    reason = (
-                        f"API вернул артикулы только для других марок авто, "
-                        f"не для {manu_name or 'данной марки'}"
+                    src_label = "OEM (из API)"
+                    oem_emoji = "✅"
+
+                oem_block = f" {oem_emoji} <b>{p_brand}</b> <code>{p_art}</code>"
+                if other_oem:
+                    others_str = "\n".join(
+                        f" • <code>{a}</code>" for _b, a in other_oem[:5]
+                    )
+                    oem_block += (
+                        f"\n\n <i>Другие арт. {p_brand} ({len(other_oem)}):</i>\n"
+                        + others_str
+                    )
+                    if len(other_oem) > 5:
+                        oem_block += f"\n <i>... и ещё {len(other_oem) - 5}</i>"
+
+                # Шаг 4: getCrosses только для основного OEM
+                raw_crosses = await api_get_crosses(session, p_art)
+                crosses_all = (
+                    filter_crosses(raw_crosses, p_art, p_brand)
+                    if raw_crosses else []
+                )
+                crosses = sort_crosses_by_priority(crosses_all)[:10]
+
+                if crosses:
+                    cross_block  = "\n".join(
+                        f" • <b>{b}</b> <code>{a}</code>" for b, a in crosses
+                    )
+                    cross_footer = "\n\n⚠️ <i>Проверяй соответствие перед заказом</i>"
+                    crosses_header = (
+                        f"🔄 <b>Аналоги (топ-{len(crosses)} из {len(crosses_all)}) —"
+                        f" {p_brand} <code>{p_art}</code>:</b>"
+                    )
+                else:
+                    cross_block  = " <i>Аналоги не найдены</i>"
+                    cross_footer = f"\n💡 /crosses <code>{p_art}</code>"
+                    crosses_header = (
+                        f"🔄 <b>Аналоги — {p_brand} <code>{p_art}</code>:</b>"
                     )
 
-                fallback = await try_oem_fallback(session, manu_name, cat_id)
-                if not fallback:
-                    await update.message.reply_text(
-                        f"❌ <b>{group_name}</b> — не удалось подобрать.\n"
-                        f"<i>{reason}.</i>\n\n"
-                        f"💡 Если знаешь OEM, попробуй:\n"
-                        f"<code>/crosses ARTICLE</code>",
-                        parse_mode="HTML",
-                    )
-                    continue
-
-                (fb_brand, fb_art), fb_crosses = fallback
-                cross_block = "\n".join(
-                    f"  • <b>{b}</b>  <code>{a}</code>" for b, a in fb_crosses[:20]
+                cat_note = (
+                    f" (cat <code>{actual_cat}</code>)"
+                    if actual_cat != cat_id else ""
                 )
                 msg = "\n".join([
-                    f"⚠️ <b>{group_name}</b> — fallback-поиск",
-                    f"<i>{reason}. Использую типовой OEM для {fb_brand}.</i>",
+                    f"✅ <b>{group_name}</b>",
                     f"VIN: <code>{vin}</code>",
                     *([f"🚗 {car_str}"] if car_str else []),
                     "─" * 28,
-                    "🔵 <b>OEM (типовой, требует проверки!):</b>",
-                    f"  ⚠️ <b>{fb_brand}</b>  <code>{fb_art}</code>",
+                    f"🔵 <b>{src_label}</b>{cat_note}:",
+                    oem_block,
                     "",
-                    f"🔄 <b>Аналоги ({len(fb_crosses)}) — {fb_brand} <code>{fb_art}</code>:</b>",
-                    cross_block,
-                    "",
-                    "⚠️ <i>Артикул типовой, сверь с каталогом перед заказом.</i>",
+                    crosses_header,
+                    cross_block + cross_footer,
                 ])
                 await update.message.reply_text(msg, parse_mode="HTML")
                 continue
 
-            p_brand, p_art = primary
+            # ── СЦЕНАРИЙ B: API вернул артикулы, но только чужих марок авто ──
+            if all_parts:
+                # Группируем по бренду (показываем максимум по 1 артикулу на бренд,
+                # до 8 брендов)
+                seen_brands: set = set()
+                foreign_lines = []
+                for b, a in all_parts:
+                    bu = b.upper().strip()
+                    if bu in seen_brands:
+                        continue
+                    seen_brands.add(bu)
+                    foreign_lines.append(f"  • <b>{b}</b> <code>{a}</code>")
+                    if len(foreign_lines) >= 8:
+                        break
 
-            # OEM блок
-            oem_block = f" ✅ <b>{p_brand}</b> <code>{p_art}</code> <i>(основной)</i>"
-            if other_oem:
-                others_str = "\n".join(f" • <code>{a}</code>" for b, a in other_oem[:5])
-                oem_block += (
-                    f"\n\n <i>Другие арт. {p_brand} ({len(other_oem)}):</i>\n" + others_str
+                msg = "\n".join([
+                    f"⚠️ <b>{group_name}</b> — артикулы вашей марки не найдены",
+                    f"VIN: <code>{vin}</code>",
+                    *([f"🚗 {car_str}"] if car_str else []),
+                    "─" * 28,
+                    f"<i>API вернул артикулы других производителей "
+                    f"для {manu_name or 'этой марки'}.</i>",
+                    "Проверь применимость по каталогу:",
+                    "",
+                    *foreign_lines,
+                    "",
+                    "💡 Если знаешь OEM — <code>/crosses ARTICLE</code>",
+                ])
+                await update.message.reply_text(msg, parse_mode="HTML")
+                continue
+
+            # ── СЦЕНАРИЙ C: API пуст ──
+            #    Для категорий без fallback (ремень ГРМ на цепном двигателе)
+            #    показываем специальное сообщение.
+            if cat_id in NO_FALLBACK_CATS:
+                hint = NO_FALLBACK_HINTS.get(cat_id, "")
+                await update.message.reply_text(
+                    f"❌ <b>{group_name}</b> не найден в базе.\n\n{hint}",
+                    parse_mode="HTML",
                 )
-                if len(other_oem) > 5:
-                    oem_block += f"\n <i>... и ещё {len(other_oem) - 5}</i>"
+                continue
 
-            # Шаг 4: getCrosses только для основного OEM
-            raw_crosses = await api_get_crosses(session, p_art)
-            crosses = filter_crosses(raw_crosses, p_art, p_brand) if raw_crosses else []
+            #    Иначе — пробуем OEM_FALLBACK_ARTICLES (последний резерв)
+            reason = "API не отдаёт данные для этого VIN/cat"
+            fallback = await try_oem_fallback(session, manu_name, cat_id)
+            if not fallback:
+                await update.message.reply_text(
+                    f"❌ <b>{group_name}</b> — не удалось подобрать.\n"
+                    f"<i>{reason}.</i>\n\n"
+                    f"💡 Если знаешь OEM, попробуй:\n"
+                    f"<code>/crosses ARTICLE</code>",
+                    parse_mode="HTML",
+                )
+                continue
 
-            if crosses:
-                cross_block  = "\n".join(f" • <b>{b}</b> <code>{a}</code>" for b, a in crosses[:20])
-                cross_footer = "\n\n⚠️ <i>Проверяй соответствие перед заказом</i>"
-            else:
-                cross_block  = " <i>Аналоги не найдены</i>"
-                cross_footer = f"\n💡 /crosses <code>{p_art}</code>"
-
+            (fb_brand, fb_art), fb_crosses_all = fallback
+            fb_crosses = sort_crosses_by_priority(fb_crosses_all)[:10]
+            cross_block = "\n".join(
+                f"  • <b>{b}</b>  <code>{a}</code>" for b, a in fb_crosses
+            )
             msg = "\n".join([
-                f"✅ <b>{group_name}</b>",
+                f"⚠️ <b>{group_name}</b> — fallback-поиск",
+                f"<i>{reason}. Использую типовой OEM для {fb_brand}.</i>",
                 f"VIN: <code>{vin}</code>",
                 *([f"🚗 {car_str}"] if car_str else []),
                 "─" * 28,
-                "🔵 <b>OEM (из API):</b>",
-                oem_block,
+                "🔵 <b>OEM (типовой, требует проверки!):</b>",
+                f"  ⚠️ <b>{fb_brand}</b>  <code>{fb_art}</code>",
                 "",
-                f"🔄 <b>Аналоги ({len(crosses)}) — {p_brand} <code>{p_art}</code>:</b>",
-                cross_block + cross_footer,
+                f"🔄 <b>Аналоги (топ-{len(fb_crosses)} из {len(fb_crosses_all)}) — "
+                f"{fb_brand} <code>{fb_art}</code>:</b>",
+                cross_block,
+                "",
+                "⚠️ <i>Артикул типовой, сверь с каталогом перед заказом.</i>",
             ])
             await update.message.reply_text(msg, parse_mode="HTML")
 
@@ -1393,10 +1595,12 @@ async def cmd_crosses(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"⚠️ Аналоги для <code>{number}</code> не найдены.", parse_mode="HTML"
             )
             return
-        crosses = filter_crosses(raw, number, "")
-        lines = [f" • <b>{b}</b> <code>{a}</code>" for b, a in crosses[:25]]
+        crosses_all = filter_crosses(raw, number, "")
+        crosses = sort_crosses_by_priority(crosses_all)[:10]
+        lines = [f" • <b>{b}</b> <code>{a}</code>" for b, a in crosses]
         await update.message.reply_text(
-            f"🔄 <b>Аналоги <code>{number}</code> ({len(crosses)}):</b>\n"
+            f"🔄 <b>Аналоги <code>{number}</code> "
+            f"(топ-{len(crosses)} из {len(crosses_all)}):</b>\n"
             + "\n".join(lines)
             + "\n\n⚠️ <i>Проверяй соответствие перед заказом</i>",
             parse_mode="HTML",
