@@ -1112,6 +1112,48 @@ def filter_cats_by_side(cats_list, side):
             out.append((cat_id, cat_label))
     return out
 
+
+# ══════════════════════════════════════════════════════════════════
+#  CURATED CATS ДЛЯ /debug
+# ══════════════════════════════════════════════════════════════════
+#  Короткий список ключевых cat-ов, по которым прогоняем coverage.
+#  Намеренно ограниченный (~20 пунктов), чтобы не сжигать лимит API.
+#  Покрывает основные группы из PARTS_MAP: фильтры, тормоза,
+#  подвеска, зажигание, ГРМ, охлаждение, ступица, трансмиссия.
+
+CURATED_DEBUG_CATS: list[tuple[str, str]] = [
+    # Фильтры
+    ("7",    "Масляный фильтр"),
+    ("8",    "Воздушный фильтр"),
+    ("9",    "Топливный фильтр"),
+    ("424",  "Салонный фильтр"),
+    # Тормоза
+    ("281",  "Колодки передние"),
+    ("282",  "Колодки задние"),
+    ("82",   "Тормозной диск передний"),
+    ("84",   "Тормозной диск задний"),
+    # Подвеска
+    ("1041", "Амортизатор передний"),
+    ("1042", "Амортизатор задний"),
+    ("188",  "Пружина передняя"),
+    ("189",  "Пружина задняя"),
+    ("273",  "Рычаг подвески передний"),
+    ("274",  "Рычаг подвески задний"),
+    ("1037", "Шаровая опора"),
+    # Зажигание
+    ("686",  "Свеча зажигания"),
+    ("689",  "Катушка зажигания"),
+    # ГРМ
+    ("306",  "Ремень ГРМ"),
+    ("307",  "Комплект ГРМ"),
+    # Охлаждение
+    ("470",  "Радиатор"),
+    # Ступица
+    ("655",  "Подшипник ступицы"),
+    # Трансмиссия
+    ("5",    "ШРУС"),
+]
+
 # ══════════════════════════════════════════════════════════════════
 #  ASYNC API
 # ══════════════════════════════════════════════════════════════════
@@ -1862,76 +1904,468 @@ async def cmd_crosses(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
+# ══════════════════════════════════════════════════════════════════
+#  ДИАГНОСТИЧЕСКИЕ ХЕЛПЕРЫ ДЛЯ /debug
+# ══════════════════════════════════════════════════════════════════
+#  Эти функции не дублируют бизнес-логику /vin: они нужны, чтобы
+#  понять, что именно знает partsapi о конкретной машине и где
+#  база слабо покрыта. Используют тот же кеш через api_*.
+
+def summarize_parts_items(
+    results: list,
+    limit: int = 5,
+) -> tuple[int, list[tuple[str, str]]]:
+    """Парсит ответ getPartsbyVIN и возвращает (total_count, samples[:limit]).
+
+    Деупликация по (BRAND, normalized_article). TRUCK_BRANDS отсеиваются
+    (как и в основном потоке) — это не баг, а сознательный выбор.
+    """
+    items: list[tuple[str, str]] = []
+    seen: set = set()
+    for r in results or []:
+        if not isinstance(r, dict):
+            continue
+        parts_str = r.get("parts")
+        if not parts_str:
+            continue
+        for brand, art in parse_parts_string(parts_str):
+            key = f"{brand.upper()}|{normalize_article(art)}"
+            if key in seen:
+                continue
+            seen.add(key)
+            items.append((brand, art))
+    return len(items), items[:limit]
+
+
+def debug_brand_info(brand_raw: str) -> dict:
+    """Информация о локальной поддержке бренда в боте.
+
+    Ничего не запрашивает у API — только наши локальные настройки.
+    """
+    bu = brand_raw.upper().strip()
+    fb_map   = OEM_FALLBACK_ARTICLES.get(bu, {})
+    pref_map = OEM_PREFIXES.get(bu, {})
+    fb_total = sum(
+        len(v) if isinstance(v, list) else 1
+        for v in fb_map.values()
+    )
+    return {
+        "brand":       bu,
+        "in_fallback": bu in OEM_FALLBACK_ARTICLES,
+        "in_prefixes": bu in OEM_PREFIXES,
+        "in_vehicle":  bu in VEHICLE_BRANDS,
+        "in_supplier": bu in OEM_SUPPLIER_BRANDS,
+        "in_truck":    bu in TRUCK_BRANDS,
+        "fb_cats":     sorted(fb_map.keys(), key=lambda c: (len(c), c)),
+        "fb_count":    fb_total,
+        "pref_cats":   sorted(pref_map.keys(), key=lambda c: (len(c), c)),
+    }
+
+
+async def debug_vin_info(session, vin: str) -> dict | None:
+    """Тонкая обёртка над api_vindecode — точка для будущих расширений."""
+    return await api_vindecode(session, vin)
+
+
+async def debug_get_parts(
+    session, vin: str, cat: str,
+) -> tuple[list, int, list[tuple[str, str]]]:
+    """Получить parts для одной cat и пересказать."""
+    results = await api_get_parts_by_vin(session, vin, cat)
+    total, samples = summarize_parts_items(results, limit=5)
+    return results, total, samples
+
+
+async def build_coverage_report(
+    session,
+    vin: str,
+    cats: list[tuple[str, str]] | None = None,
+) -> dict:
+    """Прогоняет curated список cat-ов и собирает отчёт по покрытию.
+
+    Возвращает:
+      {
+        "checked":      int,
+        "working":      int,
+        "empty":        int,
+        "percent":      int,
+        "level":        "weak" | "partial" | "ok",
+        "per_cat":      [{cat_id, name, count, samples}, ...],
+        "working_list": [...],
+        "empty_list":   [...],
+      }
+    Паузы между запросами уже встроены в async_get (API_DELAY),
+    поэтому здесь дополнительно не задерживаемся.
+    """
+    if cats is None:
+        cats = CURATED_DEBUG_CATS
+
+    per_cat: list[dict] = []
+    for cat_id, cat_name in cats:
+        results = await api_get_parts_by_vin(session, vin, cat_id)
+        total, samples = summarize_parts_items(results, limit=2)
+        per_cat.append({
+            "cat_id":  cat_id,
+            "name":    cat_name,
+            "count":   total,
+            "samples": samples,
+        })
+
+    working = [c for c in per_cat if c["count"] > 0]
+    empty   = [c for c in per_cat if c["count"] == 0]
+    checked = len(per_cat) or 1
+    percent = int(round(100 * len(working) / checked))
+    if percent < 20:
+        level = "weak"
+    elif percent < 50:
+        level = "partial"
+    else:
+        level = "ok"
+
+    return {
+        "checked":      len(per_cat),
+        "working":      len(working),
+        "empty":        len(empty),
+        "percent":      percent,
+        "level":        level,
+        "per_cat":      per_cat,
+        "working_list": working,
+        "empty_list":   empty,
+    }
+
+
+_COVERAGE_VERDICT = {
+    "weak":    ("❌", "очень слабое покрытие — не стоит ожидать точного OEM "
+                     "для большинства запросов"),
+    "partial": ("⚠️", "частичное покрытие — часть категорий доступна, часть нет"),
+    "ok":      ("✅", "нормальное покрытие — пустые ответы вероятнее связаны "
+                     "с конкретными cat, а не VIN целиком"),
+}
+
+
+def _fmt_vin_info_block(info: dict) -> list[str]:
+    """Форматирует VIN-info в список читаемых строк.
+
+    Если поля нет в ответе — пишем «—» явно, чтобы было видно.
+    """
+    def _v(key: str) -> str:
+        val = info.get(key)
+        if val in (None, ""):
+            return "<i>—</i>"
+        return str(val)
+    return [
+        f"<b>Марка:</b>        {_v('manuName')}",
+        f"<b>Модель:</b>       {_v('modelName')}",
+        f"<b>Модификация:</b>  {_v('typeName')}",
+        f"<b>Каталог:</b>      {_v('katalog')}",
+        f"<b>Модели (TecDoc):</b> {_v('modely')}",
+        f"<b>Рынок:</b>        {_v('rynok')}",
+    ]
+
+
+_DEBUG_USAGE = (
+    "📋 <b>/debug — диагностика VIN</b>\n\n"
+    "<code>/debug vin VIN</code> — расшифровка VIN\n"
+    "<code>/debug vinraw VIN</code> — сырой ответ VINdecodeOE\n"
+    "<code>/debug parts VIN cat</code> — запрос по одной cat\n"
+    "<code>/debug cats VIN</code> — статус всех ключевых cat\n"
+    "<code>/debug coverage VIN</code> — итог по покрытию\n"
+    "<code>/debug matrix VIN</code> — VIN + бренд + coverage\n"
+    "<code>/debug brand BRAND</code> — поддержка бренда локально\n"
+    "<code>/debug crosses ART</code> — сырой ответ tecdocCrosses"
+)
+
+
 async def cmd_debug(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not context.args or len(context.args) < 2:
-        await update.message.reply_text(
-            "<code>/debug vin XW7BF4FK60S145161</code>\n"
-            "<code>/debug parts XW7BF4FK60S145161 8</code>\n"
-            "<code>/debug crosses 17801-0H030</code>",
-            parse_mode="HTML",
-        )
+    if not context.args:
+        await update.message.reply_text(_DEBUG_USAGE, parse_mode="HTML")
         return
 
     cmd = context.args[0].lower()
 
-    async with aiohttp.ClientSession() as session:
-        if cmd == "vin":
-            info = await api_vindecode(session, context.args[1].upper())
-            if not info:
-                await update.message.reply_text("❌ VINdecode не вернул данные.")
-                return
-            lines = [
-                f"<b>Марка:</b> {info.get('manuName')}",
-                f"<b>Модель:</b> {info.get('modelName')}",
-                f"<b>Модификация:</b> {info.get('typeName')}",
-                f"<b>carId:</b> {info.get('carId')}",
-                f"<b>Кузов:</b> {info.get('bodyStyle')}",
-                f"<b>Топливо:</b> {info.get('fuelType')}",
-                f"<b>Объём:</b> {info.get('cylinderCapacityLiter')} л",
-                f"<b>Мощность:</b> {info.get('powerKwFrom')} кВт / {info.get('powerHpFrom')} л.с.",
-                f"<b>Привод:</b> {info.get('impulsionType')}",
-                f"<b>Годы:</b> {str(info.get('yearOfConstrFrom',''))[:4]}–{str(info.get('yearOfConstrTo',''))[:4]}",
-            ]
-            await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+    # /debug brand BRAND — единственная команда без необходимости в session
+    if cmd == "brand":
+        if len(context.args) < 2:
+            await update.message.reply_text(
+                "<code>/debug brand BRAND</code>\nПример: <code>/debug brand TOYOTA</code>",
+                parse_mode="HTML",
+            )
+            return
+        info = debug_brand_info(" ".join(context.args[1:]))
+        def _b(flag: bool) -> str:
+            return "✅" if flag else "❌"
+        lines = [
+            f"🏷️ <b>Бренд:</b> <code>{info['brand']}</code>",
+            "─" * 28,
+            f"{_b(info['in_vehicle'])}  В списке VEHICLE_BRANDS (определяемых марок)",
+            f"{_b(info['in_supplier'])}  В OEM_SUPPLIER_BRANDS (надёжный поставщик)",
+            f"{_b(info['in_truck'])}  В TRUCK_BRANDS (отфильтровывается)",
+            f"{_b(info['in_prefixes'])}  В OEM_PREFIXES "
+            f"({len(info['pref_cats'])} cat-ов настроено)",
+            f"{_b(info['in_fallback'])}  В OEM_FALLBACK_ARTICLES "
+            f"({len(info['fb_cats'])} cat-ов, {info['fb_count']} артикулов)",
+        ]
+        if info["fb_cats"]:
+            lines.append("")
+            lines.append(f"<b>Fallback cat-ы:</b> <code>{', '.join(info['fb_cats'])}</code>")
+        if info["pref_cats"]:
+            lines.append(f"<b>Prefix cat-ы:</b>   <code>{', '.join(info['pref_cats'])}</code>")
+        if not (info["in_fallback"] or info["in_prefixes"]):
+            lines.append("")
+            lines.append("⚠️ <i>Бренд не поддержан локально — бот целиком зависит "
+                         "от ответов API.</i>")
+        await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+        return
 
-        elif cmd == "parts":
-            if len(context.args) < 3:
+    if len(context.args) < 2:
+        await update.message.reply_text(_DEBUG_USAGE, parse_mode="HTML")
+        return
+
+    async with aiohttp.ClientSession() as session:
+        # ── /debug vin VIN ──
+        if cmd == "vin":
+            vin = context.args[1].upper().strip()
+            info = await debug_vin_info(session, vin)
+            if not info:
                 await update.message.reply_text(
-                    "<code>/debug parts VIN cat</code>", parse_mode="HTML"
+                    f"❌ VINdecodeOE не вернул данные для <code>{vin}</code>.",
+                    parse_mode="HTML",
                 )
                 return
+            lines = [
+                f"🚗 <b>VIN:</b> <code>{vin}</code>",
+                "─" * 28,
+                *_fmt_vin_info_block(info),
+            ]
+            missing = [k for k in ("manuName", "katalog") if not info.get(k)]
+            if missing:
+                lines.append("")
+                lines.append(
+                    f"⚠️ <i>Не заполнены ключевые поля: "
+                    f"{', '.join(missing)}. Это плохой знак для дальнейших запросов.</i>"
+                )
+            await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+            return
+
+        # ── /debug vinraw VIN ──
+        if cmd == "vinraw":
+            vin = context.args[1].upper().strip()
+            params = {
+                "method": "VINdecodeOE",
+                "key":    PARTSAPI_KEY_VINDECODE,
+                "vin":    vin,
+                "lang":   "ru",
+            }
+            try:
+                async with session.get(
+                    BASE_URL, params=params,
+                    timeout=aiohttp.ClientTimeout(total=20),
+                ) as r:
+                    status = r.status
+                    raw = await r.text()
+            except Exception as e:
+                await update.message.reply_text(
+                    f"❌ HTTP error: {type(e).__name__}: {e}"
+                )
+                return
+            await update.message.reply_text(
+                f"<b>HTTP {status}</b>\n<pre>{raw[:3500]}</pre>",
+                parse_mode="HTML",
+            )
+            return
+
+        # ── /debug parts VIN cat ──
+        if cmd == "parts":
+            if len(context.args) < 3:
+                await update.message.reply_text(
+                    "<code>/debug parts VIN cat</code>", parse_mode="HTML",
+                )
+                return
+            vin = context.args[1].upper().strip()
+            cat = context.args[2].strip()
+            # Сначала — реальный HTTP-запрос с показом status (для диагностики).
             params = {
                 "method": "getPartsbyVIN",
-                "key": PARTSAPI_KEY_VIN,
-                "vin": context.args[1].upper(),
-                "type": "oem",
-                "cat": context.args[2],
+                "key":    PARTSAPI_KEY_VIN,
+                "vin":    vin,
+                "type":   "oem",
+                "cat":    cat,
             }
-            async with session.get(
-                BASE_URL, params=params, timeout=aiohttp.ClientTimeout(total=20)
-            ) as r:
-                raw = await r.text()
+            status = None
+            try:
+                async with session.get(
+                    BASE_URL, params=params,
+                    timeout=aiohttp.ClientTimeout(total=20),
+                ) as r:
+                    status = r.status
+                    raw_text = await r.text()
+            except Exception as e:
+                await update.message.reply_text(
+                    f"❌ HTTP error для cat=<code>{cat}</code>: "
+                    f"{type(e).__name__}: {e}",
+                    parse_mode="HTML",
+                )
+                return
+            # Параллельно — через кеш, чтобы получить распарсенные items.
+            results, total, samples = await debug_get_parts(session, vin, cat)
+            lines = [
+                f"🔧 <b>getPartsbyVIN</b>",
+                f"VIN: <code>{vin}</code> | cat: <code>{cat}</code>",
+                f"HTTP: <b>{status}</b> | items: <b>{total}</b>",
+                "─" * 28,
+            ]
+            if total == 0:
+                lines.append("⚠️ <i>API вернул пустой набор parts для этого VIN/cat.</i>")
+                lines.append("")
+                lines.append("<b>Сырое тело:</b>")
+                lines.append(f"<pre>{raw_text[:1200]}</pre>")
+            else:
+                for brand, art in samples:
+                    lines.append(f"  • <b>{brand}</b>  <code>{art}</code>")
+                if total > len(samples):
+                    lines.append(f"  <i>… и ещё {total - len(samples)}</i>")
             await update.message.reply_text(
-                f"<pre>{raw[:2000]}</pre>", parse_mode="HTML"
+                "\n".join(lines), parse_mode="HTML",
             )
+            return
 
-        elif cmd == "crosses":
+        # ── /debug cats VIN ──
+        if cmd == "cats":
+            vin = context.args[1].upper().strip()
+            await update.message.reply_text(
+                f"⏳ Проверяю {len(CURATED_DEBUG_CATS)} ключевых cat для "
+                f"<code>{vin}</code>…",
+                parse_mode="HTML",
+            )
+            report = await build_coverage_report(session, vin)
+            lines = [
+                f"📊 <b>Cats coverage</b> для <code>{vin}</code>",
+                "─" * 28,
+            ]
+            for c in report["per_cat"]:
+                mark = "✅" if c["count"] > 0 else "❌"
+                sample_str = ""
+                if c["samples"]:
+                    b, a = c["samples"][0]
+                    sample_str = f"  <i>{b} {a}</i>"
+                lines.append(
+                    f"{mark} cat <code>{c['cat_id']:>4}</code> "
+                    f"({c['count']:>2})  {c['name']}{sample_str}"
+                )
+            await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+            return
+
+        # ── /debug coverage VIN ──
+        if cmd == "coverage":
+            vin = context.args[1].upper().strip()
+            await update.message.reply_text(
+                f"⏳ Считаю покрытие по {len(CURATED_DEBUG_CATS)} cat для "
+                f"<code>{vin}</code>…",
+                parse_mode="HTML",
+            )
+            report = await build_coverage_report(session, vin)
+            emoji, verdict = _COVERAGE_VERDICT[report["level"]]
+            working_str = ", ".join(
+                f"{c['cat_id']}" for c in report["working_list"]
+            ) or "—"
+            empty_str = ", ".join(
+                f"{c['cat_id']}" for c in report["empty_list"]
+            ) or "—"
+            lines = [
+                f"📊 <b>Coverage</b> для <code>{vin}</code>",
+                "─" * 28,
+                f"Проверено cat: <b>{report['checked']}</b>",
+                f"С данными:    <b>{report['working']}</b>",
+                f"Пустых:       <b>{report['empty']}</b>",
+                f"Покрытие:     <b>{report['percent']}%</b>  {emoji}",
+                "",
+                f"<i>{verdict}.</i>",
+                "",
+                f"<b>Работают:</b> <code>{working_str}</code>",
+                f"<b>Пусто:</b>    <code>{empty_str}</code>",
+            ]
+            await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+            return
+
+        # ── /debug matrix VIN ──
+        if cmd == "matrix":
+            vin = context.args[1].upper().strip()
+            await update.message.reply_text(
+                f"⏳ Собираю матрицу для <code>{vin}</code>…",
+                parse_mode="HTML",
+            )
+            info   = await debug_vin_info(session, vin)
+            report = await build_coverage_report(session, vin)
+
+            manu     = (info or {}).get("manuName", "") or "—"
+            model    = (info or {}).get("modelName", "") or "—"
+            katalog  = (info or {}).get("katalog", "")    or "—"
+            brand_info = debug_brand_info(manu) if manu and manu != "—" else None
+            emoji, verdict = _COVERAGE_VERDICT[report["level"]]
+
+            lines = [
+                f"🧭 <b>VIN matrix</b> <code>{vin}</code>",
+                "─" * 28,
+                f"<b>Бренд / модель:</b> {manu} / {model}",
+                f"<b>Каталог:</b>        <code>{katalog}</code>",
+            ]
+            if brand_info:
+                local_marks = []
+                if brand_info["in_fallback"]:
+                    local_marks.append(f"FB({len(brand_info['fb_cats'])})")
+                if brand_info["in_prefixes"]:
+                    local_marks.append(f"PFX({len(brand_info['pref_cats'])})")
+                if brand_info["in_supplier"]:
+                    local_marks.append("SUP")
+                if brand_info["in_truck"]:
+                    local_marks.append("TRUCK")
+                lines.append(
+                    f"<b>Локально:</b>       "
+                    f"{' '.join(local_marks) if local_marks else '— не поддержан'}"
+                )
+            lines += [
+                "",
+                f"<b>Coverage:</b> {report['working']}/{report['checked']} "
+                f"({report['percent']}%) {emoji}",
+                f"<b>Работают:</b> <code>"
+                f"{', '.join(c['cat_id'] for c in report['working_list']) or '—'}"
+                f"</code>",
+                f"<b>Пусто:</b>    <code>"
+                f"{', '.join(c['cat_id'] for c in report['empty_list']) or '—'}"
+                f"</code>",
+                "",
+                f"<i>{verdict}.</i>",
+            ]
+            await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+            return
+
+        # ── /debug crosses ART (без изменений: сырой ответ) ──
+        if cmd == "crosses":
             number = normalize_article(" ".join(context.args[1:]))
             params = {
                 "method": "getCrosses",
-                "key": PARTSAPI_KEY_CROSSES,
+                "key":    PARTSAPI_KEY_CROSSES,
                 "number": number,
             }
-            async with session.get(
-                BASE_URL, params=params, timeout=aiohttp.ClientTimeout(total=20)
-            ) as r:
-                raw = await r.text()
+            try:
+                async with session.get(
+                    BASE_URL, params=params,
+                    timeout=aiohttp.ClientTimeout(total=20),
+                ) as r:
+                    status = r.status
+                    raw = await r.text()
+            except Exception as e:
+                await update.message.reply_text(
+                    f"❌ HTTP error: {type(e).__name__}: {e}"
+                )
+                return
             await update.message.reply_text(
-                f"<pre>{raw[:2000]}</pre>", parse_mode="HTML"
+                f"<b>HTTP {status}</b>\n<pre>{raw[:2000]}</pre>",
+                parse_mode="HTML",
             )
+            return
 
-        else:
-            await update.message.reply_text("Неизвестная команда. /debug — справка.")
+        await update.message.reply_text(_DEBUG_USAGE, parse_mode="HTML")
 
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1939,7 +2373,9 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "👋 <b>VIN-поиск запчастей</b>\n\n"
         "<code>/vin VIN запчасть</code> — подобрать деталь\n"
         "<code>/crosses артикул</code> — найти аналоги\n"
+        "<code>/debug</code> — диагностика покрытия / VIN\n"
         "<code>/debug vin VIN</code> — расшифровка VIN\n"
+        "<code>/debug coverage VIN</code> — покрытие базы\n"
         "/help — список запчастей",
         parse_mode="HTML",
     )
